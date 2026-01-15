@@ -11,7 +11,7 @@ use crate::{
 };
 
 use crate::server::chancomms::DataChanCmd;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, collections::HashMap};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -146,8 +146,8 @@ where
             DataChanCmd::Retr { path } => {
                 self.exec_retr(path, start_pos).await;
             }
-            DataChanCmd::Stor { path } => {
-                self.exec_stor(path, start_pos).await;
+            DataChanCmd::Stor { path, user_metadata } => {
+                self.exec_stor(path, start_pos, user_metadata).await;
             }
             DataChanCmd::List { path, .. } => {
                 self.exec_list_variant(path, ListCommand::List).await;
@@ -252,7 +252,7 @@ where
     }
 
     #[tracing_attributes::instrument]
-    async fn exec_stor(self, path: String, start_pos: u64) {
+    async fn exec_stor(self, path: String, start_pos: u64, user_metadata: Option<HashMap<String,String>>) {
         let path_copy = path.clone();
         let path = self.cwd.join(path);
         let tx = self.control_msg_tx.clone();
@@ -260,11 +260,12 @@ where
         let start_time = Instant::now();
         let put_result = self
             .storage
-            .put(
+            .put_meta(
                 (*self.user).as_ref().unwrap(),
                 Self::reader(self.socket, self.ftps_mode, "stor").await,
                 path,
                 start_pos,
+                user_metadata,
             )
             .await;
         let duration = start_time.elapsed();

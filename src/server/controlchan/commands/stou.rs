@@ -35,7 +35,7 @@ where
         match session.data_cmd_tx.take() {
             Some(tx) => {
                 tokio::spawn(async move {
-                    if let Err(err) = tx.send(DataChanCmd::Stor { path }).await {
+                    if let Err(err) = tx.send(DataChanCmd::Stor { path, user_metadata: None }).await {
                         slog::warn!(logger, "STOU: could not send Stor command over data channel. {}", err);
                     }
                 });

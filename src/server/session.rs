@@ -16,6 +16,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+use redis::aio::ConnectionManager;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 // TraceId is an identifier used to correlate logs statements together.
@@ -115,6 +116,8 @@ where
     pub failed_logins: Option<Arc<FailedLoginsCache>>,
     // An optional functor that can bind a socket
     pub binder: Option<Box<dyn crate::options::Binder>>,
+    // A ConnectionManager to a Redis/Valkey store for metadata
+    pub metastore: Option<ConnectionManager>,
 }
 
 impl<Storage, User> Session<Storage, User>
@@ -149,6 +152,7 @@ where
             cert_chain: None,
             failed_logins: None,
             binder: None,
+            metastore: None,
         }
     }
 
@@ -182,6 +186,11 @@ where
 
     pub fn failed_logins(mut self, failed_logins: Option<Arc<FailedLoginsCache>>) -> Self {
         self.failed_logins = failed_logins;
+        self
+    }
+
+    pub fn metastore(mut self, metastore: Option<ConnectionManager>) -> Self {
+        self.metastore = metastore;
         self
     }
 }

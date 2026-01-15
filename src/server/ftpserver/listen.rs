@@ -4,6 +4,7 @@ use super::{ServerError, chosen::OptionsHolder};
 use crate::server::failed_logins::FailedLoginsCache;
 use crate::server::shutdown;
 use crate::{auth::UserDetail, server::controlchan, storage::StorageBackend};
+use redis::aio::ConnectionManager;
 use std::ffi::OsString;
 use std::net::SocketAddr;
 #[cfg(unix)]
@@ -25,6 +26,7 @@ where
     pub failed_logins: Option<Arc<FailedLoginsCache>>,
     pub connection_helper: Option<OsString>,
     pub connection_helper_args: Vec<OsString>,
+    pub metastore: Option<ConnectionManager>,
 }
 
 impl<Storage, User> Listener<Storage, User>
@@ -42,6 +44,7 @@ where
             failed_logins,
             connection_helper,
             connection_helper_args,
+            metastore,
         } = self;
         let listener = TcpListener::bind(bind_address).await?;
         loop {
@@ -56,8 +59,16 @@ where
                         #[cfg(not(unix))]
                         unimplemented!()
                     } else {
-                        let result =
-                            controlchan::spawn_loop::<Storage, User>((&options).into(), tcp_stream, None, None, shutdown_listener, failed_logins.clone()).await;
+                        let result = controlchan::spawn_loop::<Storage, User>(
+                            (&options).into(),
+                            tcp_stream,
+                            None,
+                            None,
+                            shutdown_listener,
+                            failed_logins.clone(),
+                            metastore.clone(),
+                        )
+                        .await;
                         if let Err(err) = result {
                             slog::error!(logger, "Could not spawn control channel loop for connection from {:?}: {:?}", socket_addr, err);
                         }

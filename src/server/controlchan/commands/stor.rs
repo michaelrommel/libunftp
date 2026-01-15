@@ -20,6 +20,8 @@ use crate::{
     storage::{Metadata, StorageBackend},
 };
 use async_trait::async_trait;
+use redis::AsyncTypedCommands;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Stor;
@@ -36,11 +38,36 @@ where
         let mut session = args.session.lock().await;
 
         let (cmd, path): (DataChanCmd, String) = match args.parsed_command.clone() {
-            Command::Stor { path } => {
+            Command::Stor { mut path } => {
+                let senderip = session.source.ip().to_string();
+                let mut con = session.metastore.clone().unwrap();
+                let key = format!("systems:by_ip:{}", senderip);
+                // let modality = con.hget(&key, "modality").await.ok().flatten().unwrap_or("unknown".to_string());
+
+                let systemdetails: std::collections::HashMap<String, String> = con.hgetall(&key).await.unwrap_or(HashMap::from([]));
+                println!("{}: {:?}", key, systemdetails);
+
+                let mut modality: String = "Unknown".to_string();
+                let mut product: String = "Unknown".to_string();
+                let mut partno: String = "Unknown".to_string();
+                let mut serial: String = "Unknown".to_string();
+                if let Some(val) = systemdetails.get("modality") {
+                    modality = val.clone();
+                }
+                if let Some(val) = systemdetails.get("product") {
+                    product = val.clone();
+                }
+                if let Some(val) = systemdetails.get("partno") {
+                    partno = val.clone();
+                }
+                if let Some(val) = systemdetails.get("serial") {
+                    serial = val.clone();
+                }
+                path = format!("{}/{}/{}/{}/inet.{}_{}", modality, product, partno, serial, senderip, path);
                 let path_clone = path.clone();
-                (DataChanCmd::Stor { path }, path_clone)
+                (DataChanCmd::Stor { path, user_metadata: Some(systemdetails) }, path_clone)
             }
-            _ => panic!("Programmer error, expected command to be LIST"),
+            _ => panic!("Programmer error, expected command to be STOR"),
         };
 
         let logger = args.logger;

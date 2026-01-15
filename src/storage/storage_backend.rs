@@ -10,6 +10,7 @@ use chrono::{
 };
 use md5::{Digest, Md5};
 use std::{
+    collections::HashMap,
     fmt::{self, Debug, Formatter, Write},
     io,
     path::Path,
@@ -322,6 +323,16 @@ pub trait StorageBackend<User: UserDetail>: Send + Sync + Debug {
         input: R,
         path: P,
         start_pos: u64,
+    ) -> Result<u64>;
+
+    /// Writes bytes from the given reader to the specified path starting at offset start_pos in the file
+    async fn put_meta<P: AsRef<Path> + Send + Debug, R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static>(
+        &self,
+        user: &User,
+        input: R,
+        path: P,
+        start_pos: u64,
+        user_metadata: Option<HashMap<String, String>>,
     ) -> Result<u64>;
 
     /// Deletes the file at the given path.

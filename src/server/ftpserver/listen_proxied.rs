@@ -17,6 +17,7 @@ use crate::{
     },
     storage::StorageBackend,
 };
+use redis::aio::ConnectionManager;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -37,6 +38,7 @@ where
     pub proxy_protocol_switchboard: Option<ProxyProtocolSwitchboard<Storage, User>>,
     pub shutdown_topic: Arc<shutdown::Notifier>,
     pub failed_logins: Option<Arc<FailedLoginsCache>>,
+    pub metastore: Option<ConnectionManager>,
 }
 
 impl<Storage, User> ProxyProtocolListener<Storage, User>
@@ -76,7 +78,7 @@ where
                             if destination_port == self.external_control_port {
                                 slog::info!(self.logger, "Incoming control connection: {:?} ({:?})(control port: {:?})", connection, socket_addr, self.external_control_port);
                                 let params: controlchan::LoopConfig<Storage,User> = (&self.options).into();
-                                let result = controlchan::spawn_loop::<Storage,User>(params, tcp_stream, Some(connection), Some(proxyloop_msg_tx.clone()), self.shutdown_topic.subscribe().await, self.failed_logins.clone()).await;
+                                let result = controlchan::spawn_loop::<Storage,User>(params, tcp_stream, Some(connection), Some(proxyloop_msg_tx.clone()), self.shutdown_topic.subscribe().await, self.failed_logins.clone(),self.metastore.clone()).await;
                                 if let Err(e) = result {
                                     slog::warn!(self.logger, "Could not spawn control channel loop for connection: {:?}", e);
                                 }

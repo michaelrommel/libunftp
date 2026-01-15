@@ -24,6 +24,7 @@ use crate::{
     storage::{Metadata, StorageBackend},
 };
 use options::{DEFAULT_GREETING, DEFAULT_IDLE_SESSION_TIMEOUT_SECS, PassiveHost};
+use redis::aio::ConnectionManager;
 #[cfg(feature = "experimental")]
 use rustls::ServerConfig;
 use slog::*;
@@ -77,6 +78,7 @@ where
     connection_helper: Option<OsString>,
     connection_helper_args: Vec<OsString>,
     binder: Arc<std::sync::Mutex<Option<Box<dyn crate::options::Binder>>>>,
+    metastore: Option<ConnectionManager>,
 }
 
 /// Used to create [`Server`]s.  
@@ -109,6 +111,7 @@ where
     connection_helper: Option<OsString>,
     connection_helper_args: Vec<OsString>,
     binder: Option<Box<dyn crate::options::Binder>>,
+    metastore: Option<ConnectionManager>,
 }
 
 impl<Storage, User> ServerBuilder<Storage, User>
@@ -161,6 +164,7 @@ where
             connection_helper: None,
             connection_helper_args: Vec::new(),
             binder: None,
+            metastore: None,
         }
     }
 
@@ -169,7 +173,7 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use libunftp::{auth, auth::AnonymousAuthenticator, Server};
+    /// use libunftp::{auth, auth::AnonymousAuthenticatog, Server};
     /// use unftp_sbe_fs::ServerExt;
     /// use std::sync::Arc;
     ///
@@ -238,6 +242,7 @@ where
             connection_helper: self.connection_helper,
             connection_helper_args: self.connection_helper_args,
             binder,
+            metastore: self.metastore,
         })
     }
 
@@ -715,10 +720,14 @@ where
     /// ```
     ///
     #[tracing_attributes::instrument]
-    pub async fn listen<T: Into<String> + Debug>(self, bind_address: T) -> std::result::Result<(), ServerError> {
+    pub async fn listen<T: Into<String> + Debug>(mut self, bind_address: T) -> std::result::Result<(), ServerError> {
         let logger = self.logger.clone();
         let bind_address: SocketAddr = bind_address.into().parse()?;
         let shutdown_notifier = Arc::new(shutdown::Notifier::new());
+
+        let client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+        let manager: ConnectionManager = client.get_connection_manager().await.expect("No connection to redis");
+        self.metastore = Some(manager);
 
         let failed_logins = self.failed_logins_policy.as_ref().map(|policy| FailedLoginsCache::new(policy.clone()));
 
@@ -732,6 +741,7 @@ where
                     proxy_protocol_switchboard: Some(ProxyProtocolSwitchboard::new(self.logger.clone(), self.passive_ports.clone())),
                     shutdown_topic: shutdown_notifier.clone(),
                     failed_logins: failed_logins.clone(),
+                    metastore: self.metastore,
                 }
                 .listen(),
             ) as Pin<Box<dyn Future<Output = std::result::Result<(), ServerError>> + Send>>,
@@ -744,6 +754,7 @@ where
                     failed_logins: failed_logins.clone(),
                     connection_helper: self.connection_helper.clone(),
                     connection_helper_args: self.connection_helper_args.clone(),
+                    metastore: self.metastore,
                 }
                 .listen(),
             ) as Pin<Box<dyn Future<Output = std::result::Result<(), ServerError>> + Send>>,
@@ -771,13 +782,16 @@ where
     ///
     /// Use this method instead of [`listen`](Server::listen) if you want to listen for and accept
     /// new connections yourself, instead of using libunftp to do it.
-    pub async fn service(self, tcp_stream: tokio::net::TcpStream) -> std::result::Result<(), crate::server::ControlChanError> {
+    pub async fn service(mut self, tcp_stream: tokio::net::TcpStream) -> std::result::Result<(), crate::server::ControlChanError> {
         let failed_logins = self.failed_logins_policy.as_ref().map(|policy| FailedLoginsCache::new(policy.clone()));
         let options: chosen::OptionsHolder<Storage, User> = (&self).into();
         let shutdown_notifier = Arc::new(shutdown::Notifier::new());
         let shutdown_listener = shutdown_notifier.subscribe().await;
+        let client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+        let manager: ConnectionManager = client.get_connection_manager().await.expect("No connection to redis");
+        self.metastore = Some(manager);
         slog::debug!(self.logger, "Servicing control connection from");
-        let result = controlchan::spawn_loop::<Storage, User>((&options).into(), tcp_stream, None, None, shutdown_listener, failed_logins.clone()).await;
+        let result = controlchan::spawn_loop::<Storage, User>((&options).into(), tcp_stream, None, None, shutdown_listener, failed_logins.clone(),self.metastore).await;
         match result {
             Err(err) => {
                 slog::error!(self.logger, "Could not spawn control channel loop: {:?}", err);

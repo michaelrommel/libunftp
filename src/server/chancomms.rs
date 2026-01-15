@@ -7,6 +7,7 @@ use crate::{
     server::session::TraceId,
     storage::{Error, StorageBackend},
 };
+use std::collections::HashMap;
 use std::fmt;
 use tokio::{
     net::TcpStream,
@@ -29,6 +30,7 @@ pub enum DataChanCmd {
     Stor {
         /// The path to the file the client would like to store.
         path: String,
+        user_metadata: Option<HashMap<String, String>>,
     },
     List {
         /// Arguments passed along with the list command.

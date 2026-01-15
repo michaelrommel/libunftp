@@ -32,6 +32,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use redis::aio::ConnectionManager;
 use rustls::ServerConnection;
 use std::{net::SocketAddr, ops::RangeInclusive, sync::Arc, time::Duration};
 use tokio::{
@@ -82,6 +83,7 @@ pub(crate) async fn spawn<Storage, User>(
     proxyloop_msg_tx: Option<ProxyLoopSender<Storage, User>>,
     mut shutdown: shutdown::Listener,
     failed_logins: Option<Arc<FailedLoginsCache>>,
+    metastore: Option<ConnectionManager>,
 ) -> Result<JoinHandle<()>, ControlChanError>
 where
     User: UserDetail + 'static,
@@ -116,7 +118,8 @@ where
         .metrics(collect_metrics)
         .control_msg_tx(control_msg_tx.clone())
         .proxy_connection(proxy_connection)
-        .failed_logins(failed_logins);
+        .failed_logins(failed_logins)
+        .metastore(metastore);
     if let Some(b) = binder.lock().unwrap().take() {
         session = session.binder(b);
     }
