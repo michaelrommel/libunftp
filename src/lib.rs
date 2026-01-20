@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/libunftp/0.21.0")]
+#![doc(html_root_url = "https://docs.rs/libunftp/0.21.1")]
 
 //! libunftp is an extensible, async, cloud orientated FTP(S) server library.
 //!
@@ -17,8 +17,8 @@
 //!
 //! ```toml
 //! [dependencies]
-//! libunftp = "0.21.0"
-//! unftp-sbe-fs = "0.2.0"
+//! libunftp = "0.21.1"
+//! unftp-sbe-fs = "0.3.0"
 //! tokio = { version = "1", features = ["full"] }
 //! ```
 //! Now you're ready to develop your server! Add the following to src/main.rs:
@@ -52,3 +52,6 @@ pub mod storage;
 pub use crate::server::ftpserver::{Server, ServerBuilder, error::ServerError, options};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+#[cfg(not(any(feature = "aws_lc_rs", feature = "ring")))]
+compile_error!("Need to enable either aws_lc_rs or ring feature for libunftp");

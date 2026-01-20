@@ -1,6 +1,5 @@
 //! The service provider interface (SPI) for auth
 
-use super::UserDetail;
 use crate::BoxError;
 
 use async_trait::async_trait;
@@ -9,12 +8,17 @@ use thiserror::Error;
 
 /// Defines the requirements for Authentication implementations
 #[async_trait]
-pub trait Authenticator<User>: Sync + Send + Debug
-where
-    User: UserDetail,
-{
+pub trait Authenticator: Sync + Send + Debug {
     /// Authenticate the given user with the given credentials.
-    async fn authenticate(&self, username: &str, creds: &Credentials) -> Result<User, AuthenticationError>;
+    ///
+    /// Returns a [`Principal`] representing the authenticated user identity.
+    /// To obtain full user details, use a [`UserDetailProvider`] to convert the `Principal`
+    /// into a full [`UserDetail`] implementation.
+    ///
+    /// [`Principal`]: struct.Principal.html
+    /// [`UserDetailProvider`]: ../trait.UserDetailProvider.html
+    /// [`UserDetail`]: ../trait.UserDetail.html
+    async fn authenticate(&self, username: &str, creds: &Credentials) -> Result<Principal, AuthenticationError>;
 
     /// Tells whether its OK to not ask for a password when a valid client cert
     /// was presented.
@@ -26,6 +30,34 @@ where
     fn name(&self) -> &str {
         std::any::type_name::<Self>()
     }
+}
+
+/// Represents an authenticated principal (user identity) returned by an [`Authenticator`].
+///
+/// A `Principal` contains the authenticated username and is the result of successful authentication.
+/// It represents the minimal identity information needed after authentication. To obtain additional
+/// user information such as home directory and account settings, use a [`UserDetailProvider`] to
+/// convert the `Principal` into a full [`UserDetail`] implementation.
+///
+/// # Example
+///
+/// ```rust
+/// use libunftp::auth::Principal;
+///
+/// let principal = Principal {
+///     username: "alice".to_string(),
+/// };
+///
+/// assert_eq!(principal.username, "alice");
+/// ```
+///
+/// [`Authenticator`]: trait.Authenticator.html
+/// [`UserDetail`]: ../trait.UserDetail.html
+/// [`UserDetailProvider`]: ../trait.UserDetailProvider.html
+#[derive(Debug, Clone)]
+pub struct Principal {
+    /// The authenticated username
+    pub username: String,
 }
 
 /// The error type returned by `Authenticator.authenticate`
@@ -83,6 +115,8 @@ pub struct Credentials {
     pub certificate_chain: Option<Vec<ClientCert>>,
     /// The IP address of the user's connection
     pub source_ip: std::net::IpAddr,
+    /// Indicates the security state of the FTP server command channel
+    pub command_channel_security: ChannelEncryptionState,
 }
 
 impl From<&str> for Credentials {
@@ -91,6 +125,7 @@ impl From<&str> for Credentials {
             password: Some(String::from(s)),
             certificate_chain: None,
             source_ip: [127, 0, 0, 1].into(),
+            command_channel_security: ChannelEncryptionState::Plaintext,
         }
     }
 }
@@ -107,7 +142,7 @@ impl ClientCert {
         let client_cert = parse_x509_certificate(&self.0);
         let subject = match client_cert {
             Ok(c) => c.1.subject().to_string(),
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+            Err(e) => return Err(std::io::Error::other(e.to_string())),
         };
 
         Ok(subject.contains(allowed_cn))
@@ -124,4 +159,13 @@ impl AsRef<[u8]> for ClientCert {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
+}
+
+/// Represents the encryption state of a channel (command or data).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelEncryptionState {
+    /// The channel is using plaintext (unencrypted)
+    Plaintext,
+    /// The channel is using TLS encryption
+    Tls,
 }

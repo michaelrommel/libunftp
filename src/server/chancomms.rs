@@ -1,4 +1,5 @@
 //! Contains code pertaining to the communication between the data and control channels.
+#![cfg_attr(not(feature = "proxy_protocol"), allow(dead_code, unused_imports))]
 
 use super::{proxy_protocol::ProxyConnection, session::SharedSession};
 use crate::{
@@ -42,6 +43,10 @@ pub enum DataChanCmd {
         /// The path of the file/directory the clients wants to list.
         path: Option<String>,
     },
+    Mlsd {
+        /// The path of the directory the clients wants to list.
+        path: Option<String>,
+    },
 }
 
 impl DataChanCmd {
@@ -51,7 +56,8 @@ impl DataChanCmd {
             DataChanCmd::Retr { path, .. } => Some(path.clone()),
             DataChanCmd::Stor { path, .. } => Some(path.clone()),
             DataChanCmd::List { path, .. } => path.clone(),
-            DataChanCmd::Nlst { path, .. } => path.clone(),
+            DataChanCmd::Mlsd { path } => path.clone(),
+            DataChanCmd::Nlst { path } => path.clone(),
         }
     }
 }

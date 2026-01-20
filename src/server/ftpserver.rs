@@ -1,6 +1,7 @@
 mod chosen;
 pub mod error;
 mod listen;
+#[cfg(feature = "proxy_protocol")]
 mod listen_proxied;
 pub mod options;
 
@@ -11,16 +12,15 @@ use super::{
     shutdown,
     tls::FtpsConfig,
 };
+#[cfg(feature = "proxy_protocol")]
+use crate::server::proxy_protocol::ProxyProtocolSwitchboard;
 use crate::{
-    auth::{Authenticator, UserDetail, anonymous::AnonymousAuthenticator},
+    auth::{Authenticator, DefaultUser, DefaultUserDetailProvider, UserDetail, UserDetailProvider, anonymous::AnonymousAuthenticator},
     notification::{DataListener, PresenceListener, nop::NopListener},
     options::ActivePassiveMode,
     options::{FailedLoginsPolicy, FtpsClientAuth, TlsFlags},
     server::shutdown::Notifier,
-    server::{
-        proxy_protocol::{ProxyMode, ProxyProtocolSwitchboard},
-        tls,
-    },
+    server::{proxy_protocol::ProxyMode, tls},
     storage::{Metadata, StorageBackend},
 };
 use options::{DEFAULT_GREETING, DEFAULT_IDLE_SESSION_TIMEOUT_SECS, PassiveHost};
@@ -50,7 +50,7 @@ use std::{ffi::OsString, fmt::Debug, future::Future, net::SocketAddr, ops::Range
 /// });
 /// ```
 ///
-/// [`Authenticator`]: auth::Authenticator
+/// [`Authenticator`]: crate::auth::Authenticator
 /// [`StorageBackend`]: storage/trait.StorageBackend.html
 pub struct Server<Storage, User>
 where
@@ -59,7 +59,8 @@ where
 {
     storage: Arc<dyn (Fn() -> Storage) + Send + Sync>,
     greeting: &'static str,
-    authenticator: Arc<dyn Authenticator<User>>,
+    authenticator: Arc<dyn Authenticator>,
+    user_detail_provider: Arc<dyn UserDetailProvider<User = User> + Send + Sync>,
     data_listener: Arc<dyn DataListener>,
     presence_listener: Arc<dyn PresenceListener>,
     passive_ports: RangeInclusive<u16>,
@@ -81,7 +82,7 @@ where
     metastore: Option<ConnectionManager>,
 }
 
-/// Used to create [`Server`]s.  
+/// Used to create [`Server`]s.
 pub struct ServerBuilder<Storage, User>
 where
     Storage: StorageBackend<User>,
@@ -89,7 +90,8 @@ where
 {
     storage: Arc<dyn (Fn() -> Storage) + Send + Sync>,
     greeting: &'static str,
-    authenticator: Arc<dyn Authenticator<User>>,
+    authenticator: Arc<dyn Authenticator>,
+    user_detail_provider: Arc<dyn UserDetailProvider<User = User> + Send + Sync>,
     data_listener: Arc<dyn DataListener>,
     presence_listener: Arc<dyn PresenceListener>,
     passive_ports: RangeInclusive<u16>,
@@ -114,21 +116,17 @@ where
     metastore: Option<ConnectionManager>,
 }
 
-impl<Storage, User> ServerBuilder<Storage, User>
+impl<Storage> ServerBuilder<Storage, DefaultUser>
 where
-    Storage: StorageBackend<User> + 'static,
+    Storage: StorageBackend<DefaultUser> + 'static,
     Storage::Metadata: Metadata,
-    User: UserDetail + 'static,
 {
     /// Construct a new [`ServerBuilder`] with the given [`StorageBackend`] generator and an [`AnonymousAuthenticator`]
     ///
     /// [`ServerBuilder`]: struct.ServerBuilder.html
     /// [`StorageBackend`]: ../storage/trait.StorageBackend.html
     /// [`AnonymousAuthenticator`]: ../auth/struct.AnonymousAuthenticator.html
-    pub fn new(sbe_generator: Box<dyn (Fn() -> Storage) + Send + Sync>) -> Self
-    where
-        AnonymousAuthenticator: Authenticator<User>,
-    {
+    pub fn new(sbe_generator: Box<dyn Fn() -> Storage + Send + Sync>) -> Self {
         Self::with_authenticator(sbe_generator, Arc::new(AnonymousAuthenticator {}))
     }
 
@@ -137,12 +135,131 @@ where
     /// [`ServerBuilder`]: struct.ServerBuilder.html
     /// [`StorageBackend`]: ../storage/trait.StorageBackend.html
     /// [`Authenticator`]: ../auth/trait.Authenticator.html
-    pub fn with_authenticator(sbe_generator: Box<dyn (Fn() -> Storage) + Send + Sync>, authenticator: Arc<dyn Authenticator<User> + Send + Sync>) -> Self {
+    pub fn with_authenticator(sbe_generator: Box<dyn (Fn() -> Storage) + Send + Sync>, authenticator: Arc<dyn Authenticator + Send + Sync>) -> Self {
         let passive_ports = options::DEFAULT_PASSIVE_PORTS;
         ServerBuilder {
             storage: Arc::from(sbe_generator),
             greeting: DEFAULT_GREETING,
             authenticator,
+            user_detail_provider: Arc::new(DefaultUserDetailProvider {}),
+            data_listener: Arc::new(NopListener {}),
+            presence_listener: Arc::new(NopListener {}),
+            passive_ports,
+            passive_host: options::DEFAULT_PASSIVE_HOST,
+            ftps_mode: FtpsConfig::Off,
+            collect_metrics: false,
+            idle_session_timeout: Duration::from_secs(DEFAULT_IDLE_SESSION_TIMEOUT_SECS),
+            proxy_protocol_mode: ProxyMode::Off,
+            logger: slog::Logger::root(slog_stdlog::StdLog {}.fuse(), slog::o!()),
+            ftps_required_control_chan: options::DEFAULT_FTPS_REQUIRE,
+            ftps_required_data_chan: options::DEFAULT_FTPS_REQUIRE,
+            ftps_tls_flags: TlsFlags::default(),
+            ftps_client_auth: FtpsClientAuth::default(),
+            ftps_trust_store: options::DEFAULT_FTPS_TRUST_STORE.into(),
+            site_md5: SiteMd5::default(),
+            shutdown: Box::pin(futures_util::future::pending()),
+            failed_logins_policy: None,
+            active_passive_mode: ActivePassiveMode::default(),
+            connection_helper: None,
+            connection_helper_args: Vec::new(),
+            binder: None,
+        }
+    }
+
+    /// Set the [`UserDetailProvider`] that will be used to convert authenticated principals
+    /// into full user details.
+    ///
+    /// This method allows you to specify a provider that converts a [`Principal`] (returned by
+    /// the [`Authenticator`]) into a full [`UserDetail`] implementation with additional user
+    /// information such as home directory and account settings.
+    ///
+    /// This method changes the `User` type parameter of the `ServerBuilder` to match the
+    /// `User` type provided by the `UserDetailProvider`. This allows the builder to work with
+    /// the specific user type throughout the server configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use libunftp::{auth::DefaultUserDetailProvider, Server};
+    /// use unftp_sbe_fs::ServerExt;
+    /// use std::sync::Arc;
+    ///
+    /// let server = Server::with_fs("/tmp")
+    ///     .user_detail_provider(Arc::new(DefaultUserDetailProvider))
+    ///     .build();
+    /// ```
+    ///
+    /// [`UserDetailProvider`]: ../auth/trait.UserDetailProvider.html
+    /// [`Principal`]: ../auth/struct.Principal.html
+    /// [`Authenticator`]: ../auth/trait.Authenticator.html
+    /// [`UserDetail`]: ../auth/trait.UserDetail.html
+    pub fn user_detail_provider<U, P>(self, provider: Arc<P>) -> ServerBuilder<Storage, U>
+    where
+        U: UserDetail + 'static,
+        P: UserDetailProvider<User = U> + Send + Sync + 'static,
+        Storage: StorageBackend<U>,
+    {
+        ServerBuilder {
+            storage: self.storage,
+            greeting: self.greeting,
+            authenticator: self.authenticator,
+            user_detail_provider: provider,
+            data_listener: self.data_listener,
+            presence_listener: self.presence_listener,
+            passive_ports: self.passive_ports,
+            passive_host: self.passive_host,
+            collect_metrics: self.collect_metrics,
+            ftps_mode: self.ftps_mode,
+            ftps_required_control_chan: self.ftps_required_control_chan,
+            ftps_required_data_chan: self.ftps_required_data_chan,
+            ftps_tls_flags: self.ftps_tls_flags,
+            ftps_client_auth: self.ftps_client_auth,
+            ftps_trust_store: self.ftps_trust_store,
+            idle_session_timeout: self.idle_session_timeout,
+            proxy_protocol_mode: self.proxy_protocol_mode,
+            logger: self.logger,
+            site_md5: self.site_md5,
+            shutdown: self.shutdown,
+            failed_logins_policy: self.failed_logins_policy,
+            active_passive_mode: self.active_passive_mode,
+            connection_helper: self.connection_helper,
+            connection_helper_args: self.connection_helper_args,
+            binder: self.binder,
+        }
+    }
+}
+
+impl<Storage, User> ServerBuilder<Storage, User>
+where
+    Storage: StorageBackend<User> + 'static,
+    Storage::Metadata: Metadata,
+    User: UserDetail + 'static,
+{
+    /// Construct a new [`ServerBuilder`] with the given [`StorageBackend`] generator and [`UserDetailProvider`].
+    /// An [`AnonymousAuthenticator`] will be used as the default authenticator. The other parameters will be set to defaults.
+    ///
+    /// This method allows you to specify a custom user type by providing a `UserDetailProvider` that converts
+    /// authenticated principals to your custom user type.
+    ///
+    /// [`ServerBuilder`]: struct.ServerBuilder.html
+    /// [`StorageBackend`]: ../storage/trait.StorageBackend.html
+    /// [`UserDetailProvider`]: ../auth/trait.UserDetailProvider.html
+    /// [`AnonymousAuthenticator`]: ../auth/struct.AnonymousAuthenticator.html
+    pub fn with_user_detail_provider<U>(
+        sbe_generator: Box<dyn Fn() -> Storage + Send + Sync>,
+        provider: Arc<dyn UserDetailProvider<User = U> + Send + Sync>,
+    ) -> ServerBuilder<Storage, U>
+    where
+        U: UserDetail + 'static,
+        Storage: StorageBackend<U> + 'static,
+        <Storage as StorageBackend<U>>::Metadata: Metadata,
+    {
+        let passive_ports = options::DEFAULT_PASSIVE_PORTS;
+        ServerBuilder {
+            storage: Arc::from(sbe_generator),
+            greeting: DEFAULT_GREETING,
+            authenticator: Arc::new(AnonymousAuthenticator {}),
+            user_detail_provider: provider,
             data_listener: Arc::new(NopListener {}),
             presence_listener: Arc::new(NopListener {}),
             passive_ports,
@@ -184,7 +301,7 @@ where
     /// ```
     ///
     /// [`Authenticator`]: ../auth/trait.Authenticator.html
-    pub fn authenticator(mut self, authenticator: Arc<dyn Authenticator<User> + Send + Sync>) -> Self {
+    pub fn authenticator(mut self, authenticator: Arc<dyn Authenticator + Send + Sync>) -> Self {
         self.authenticator = authenticator;
         self
     }
@@ -224,6 +341,7 @@ where
             storage: self.storage,
             greeting: self.greeting,
             authenticator: self.authenticator,
+            user_detail_provider: self.user_detail_provider,
             data_listener: self.data_listener,
             presence_listener: self.presence_listener,
             passive_ports: self.passive_ports,
@@ -556,6 +674,7 @@ where
     ///     .proxy_protocol_mode(2121)
     ///     .build();
     /// ```
+    #[cfg(feature = "proxy_protocol")]
     pub fn proxy_protocol_mode(mut self, external_control_port: u16) -> Self {
         self.proxy_protocol_mode = external_control_port.into();
         self
@@ -687,20 +806,6 @@ where
     Storage::Metadata: Metadata,
     User: UserDetail + 'static,
 {
-    /// Construct a new [`ServerBuilder`] with the given [`StorageBackend`] generator and an [`AnonymousAuthenticator`]
-    ///
-    /// [`ServerBuilder`]: struct.ServerBuilder.html
-    /// [`StorageBackend`]: ../storage/trait.StorageBackend.html
-    /// [`AnonymousAuthenticator`]: ../auth/struct.AnonymousAuthenticator.html
-    #[deprecated(since = "0.19.0", note = "use ServerBuilder::new instead")]
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(sbe_generator: Box<dyn (Fn() -> Storage) + Send + Sync>) -> ServerBuilder<Storage, User>
-    where
-        AnonymousAuthenticator: Authenticator<User>,
-    {
-        ServerBuilder::new(sbe_generator)
-    }
-
     /// Runs the main FTP process asynchronously. Should be started in a async runtime context.
     ///
     /// # Example
@@ -733,6 +838,7 @@ where
         let failed_logins = self.failed_logins_policy.as_ref().map(|policy| FailedLoginsCache::new(policy.clone()));
 
         let listen_future = match self.proxy_protocol_mode {
+            #[cfg(feature = "proxy_protocol")]
             ProxyMode::On { external_control_port } => Box::pin(
                 listen_proxied::ProxyProtocolListener {
                     bind_address,
@@ -746,6 +852,7 @@ where
                 }
                 .listen(),
             ) as Pin<Box<dyn Future<Output = std::result::Result<(), ServerError>> + Send>>,
+
             ProxyMode::Off => Box::pin(
                 listen::Listener {
                     bind_address,
@@ -820,19 +927,6 @@ where
         }
         // TODO: Implement feature where we keep on listening for a while i.e. GracefulAcceptingConnections
     }
-
-    /// Construct a new [`ServerBuilder`] with the given [`StorageBackend`] generator and [`Authenticator`]. The other parameters will be set to defaults.
-    ///
-    /// [`ServerBuilder`]: struct.ServerBuilder.html
-    /// [`StorageBackend`]: ../storage/trait.StorageBackend.html
-    /// [`Authenticator`]: ../auth/trait.Authenticator.html
-    #[deprecated(since = "0.19.0", note = "use ServerBuilder::with_authenticator instead")]
-    pub fn with_authenticator(
-        sbe_generator: Box<dyn (Fn() -> Storage) + Send + Sync>,
-        authenticator: Arc<dyn Authenticator<User> + Send + Sync>,
-    ) -> ServerBuilder<Storage, User> {
-        ServerBuilder::with_authenticator(sbe_generator, authenticator)
-    }
 }
 
 impl<Storage, User> From<&Server<Storage, User>> for chosen::OptionsHolder<Storage, User>
@@ -844,6 +938,7 @@ where
     fn from(server: &Server<Storage, User>) -> Self {
         chosen::OptionsHolder {
             authenticator: server.authenticator.clone(),
+            user_detail_provider: server.user_detail_provider.clone(),
             storage: server.storage.clone(),
             ftps_config: server.ftps_mode.clone(),
             collect_metrics: server.collect_metrics,
@@ -871,6 +966,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerBuilder")
             .field("authenticator", &self.authenticator)
+            .field("user_detail_provider", &self.user_detail_provider)
             .field("collect_metrics", &self.collect_metrics)
             .field("active_passive_mode", &self.active_passive_mode)
             .field("greeting", &self.greeting)
@@ -899,6 +995,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerBuilder")
             .field("authenticator", &self.authenticator)
+            .field("user_detail_provider", &self.user_detail_provider)
             .field("collect_metrics", &self.collect_metrics)
             .field("active_passive_mode", &self.active_passive_mode)
             .field("greeting", &self.greeting)
