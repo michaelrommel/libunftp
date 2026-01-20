@@ -725,7 +725,8 @@ where
         let bind_address: SocketAddr = bind_address.into().parse()?;
         let shutdown_notifier = Arc::new(shutdown::Notifier::new());
 
-        let client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+        // let client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+        let client = redis::Client::open("rediss://clustercfg.nucleus-aeroftp-db.fu5sfe.memorydb.eu-central-1.amazonaws.com:6379").unwrap();
         let manager: ConnectionManager = client.get_connection_manager().await.expect("No connection to redis");
         self.metastore = Some(manager);
 
