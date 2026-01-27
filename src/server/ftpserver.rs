@@ -163,6 +163,7 @@ where
             connection_helper: None,
             connection_helper_args: Vec::new(),
             binder: None,
+            metastore: None,
         }
     }
 
@@ -225,6 +226,7 @@ where
             connection_helper: self.connection_helper,
             connection_helper_args: self.connection_helper_args,
             binder: self.binder,
+            metastore: None,
         }
     }
 }
@@ -895,11 +897,21 @@ where
         let options: chosen::OptionsHolder<Storage, User> = (&self).into();
         let shutdown_notifier = Arc::new(shutdown::Notifier::new());
         let shutdown_listener = shutdown_notifier.subscribe().await;
-        let client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+        // let client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+        let client = redis::Client::open("rediss://clustercfg.nucleus-aeroftp-db.fu5sfe.memorydb.eu-central-1.amazonaws.com:6379").unwrap();
         let manager: ConnectionManager = client.get_connection_manager().await.expect("No connection to redis");
         self.metastore = Some(manager);
         slog::debug!(self.logger, "Servicing control connection from");
-        let result = controlchan::spawn_loop::<Storage, User>((&options).into(), tcp_stream, None, None, shutdown_listener, failed_logins.clone(),self.metastore).await;
+        let result = controlchan::spawn_loop::<Storage, User>(
+            (&options).into(),
+            tcp_stream,
+            None,
+            None,
+            shutdown_listener,
+            failed_logins.clone(),
+            self.metastore,
+        )
+        .await;
         match result {
             Err(err) => {
                 slog::error!(self.logger, "Could not spawn control channel loop: {:?}", err);
