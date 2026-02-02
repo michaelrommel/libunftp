@@ -22,6 +22,7 @@ use crate::{
 use async_trait::async_trait;
 use redis::AsyncTypedCommands;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 #[derive(Debug)]
 pub struct Stor;
@@ -39,13 +40,17 @@ where
 
         let (cmd, path): (DataChanCmd, String) = match args.parsed_command.clone() {
             Command::Stor { mut path } => {
-                let senderip = session.source.ip().to_string();
+                // let senderip = session.source.ip();
+                let senderip = match session.source {
+                    SocketAddr::V4(addr) => addr.ip().to_string(),
+                    SocketAddr::V6(addr) => prettify_ip::to_expanded_ipv6(addr.ip()),
+                };
                 let mut con = session.metastore.clone().unwrap();
                 let key = format!("systems:by_ip:{}", senderip);
                 // let modality = con.hget(&key, "modality").await.ok().flatten().unwrap_or("unknown".to_string());
 
                 let systemdetails: std::collections::HashMap<String, String> = con.hgetall(&key).await.unwrap_or(HashMap::from([]));
-                println!("{}: {:?}", key, systemdetails);
+                // println!("{}: {:?}", key, systemdetails);
 
                 let mut modality: String = "Unknown".to_string();
                 let mut product: String = "Unknown".to_string();
@@ -65,7 +70,13 @@ where
                 }
                 path = format!("{}/{}/{}/{}/inet.{}_{}", modality, product, partno, serial, senderip, path);
                 let path_clone = path.clone();
-                (DataChanCmd::Stor { path, user_metadata: Some(systemdetails) }, path_clone)
+                (
+                    DataChanCmd::Stor {
+                        path,
+                        user_metadata: Some(systemdetails),
+                    },
+                    path_clone,
+                )
             }
             _ => panic!("Programmer error, expected command to be STOR"),
         };
