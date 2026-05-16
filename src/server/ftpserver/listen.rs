@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
-use tokio::net::TcpListener;
+use tokio::net::TcpSocket;
 
 // Listener listens for control channel connections on a TCP port and spawns a control channel loop
 // in a new task for each incoming connection.
@@ -43,12 +43,33 @@ where
             connection_helper,
             connection_helper_args,
         } = self;
-        let listener = TcpListener::bind(bind_address).await?;
+        // Use a manually-configured socket so we can set a large listen backlog.
+        // The default TcpListener::bind() uses a backlog of 128 (on many
+        // platforms), which saturates under high connection rates and causes the
+        // kernel to silently drop completed TCP handshakes before the application
+        // has a chance to accept them.  IPVS marks those connections ESTABLISHED
+        // (it saw the SYN-ACK) but aeroftp never receives them.
+        let socket = if bind_address.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        }?;
+        socket.set_reuseaddr(true)?;
+        socket.bind(bind_address)?;
+        // 4096 gives headroom well above the peak accept rate seen in production.
+        let listener = socket.listen(4096)?;
         loop {
-            let shutdown_listener = shutdown_topic.subscribe().await;
+            // accept() is the FIRST await in the loop — as soon as the Tokio
+            // scheduler wakes this task it drains the kernel accept queue
+            // immediately, without any preceding await that could delay it.
             match listener.accept().await {
                 Ok((tcp_stream, socket_addr)) => {
-                    slog::info!(logger, "Incoming control connection from {:?}", socket_addr);
+                    let local_addr = tcp_stream.local_addr().ok();
+                    slog::info!(logger, "Incoming control connection from {:?} to {:?}", socket_addr, local_addr);
+                    // subscribe() per connection: each control loop needs its own
+                    // shutdown Receiver.  Moved here (after accept) so it does not
+                    // delay the accept() call on the next iteration.
+                    let shutdown_listener = shutdown_topic.subscribe().await;
                     if let Some(helper) = connection_helper.as_ref() {
                         slog::info!(logger, "Spawning connection helper: {:?} {:?}", helper, connection_helper_args);
                         #[cfg(unix)]
