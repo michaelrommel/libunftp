@@ -111,7 +111,12 @@ where
 
     pub fn unregister_by_key(&mut self, key: &SwitchboardKey) {
         if self.switchboard.remove(key).is_none() {
-            slog::warn!(self.logger, "Entry already removed? key: {:?}", key);
+            // This is expected in pooled mode: when a session issues a second EPSV/PASV
+            // while the previous data channel entry was already cleaned up by the normal
+            // completion path.  reserve() still holds the old key in
+            // session.switchboard_active_datachan and tries to remove it here; the
+            // remove returning None is benign.
+            slog::debug!(self.logger, "Entry already removed (expected on reuse): key: {:?}", key);
         }
     }
 

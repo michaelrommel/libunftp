@@ -842,7 +842,7 @@ where
     /// drop(rt);
     /// ```
     ///
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     pub async fn listen<T: Into<String> + Debug>(self, bind_address: T) -> std::result::Result<(), ServerError> {
         let logger = self.logger.clone();
         let bind_address: SocketAddr = bind_address.into().parse()?;

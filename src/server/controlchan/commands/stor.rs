@@ -44,18 +44,20 @@ where
         };
 
         let logger = args.logger;
+        slog::info!(logger, "STOR: command received"; "path" => &path);
         match session.data_cmd_tx.take() {
             Some(tx) => {
+                slog::info!(logger, "STOR: data channel available, dispatching command and sending 150"; "path" => &path);
+                let logger2 = logger.clone();
                 tokio::spawn(async move {
                     if let Err(err) = tx.send(cmd).await {
-                        slog::warn!(logger, "STOR: could not notify data channel to respond with STOR. {}", err);
+                        slog::warn!(logger2, "STOR: could not notify data channel to respond with STOR. {}", err);
                     }
                 });
                 Ok(Reply::new(ReplyCode::FileStatusOkay, "Ready to receive data"))
             }
             None => {
-                slog::warn!(logger, "STOR: no data connection established for STORing {:?}", path);
-
+                slog::warn!(logger, "STOR: no data connection established"; "path" => &path);
                 Ok(Reply::new(ReplyCode::CantOpenDataConnection, "No data connection established"))
             }
         }

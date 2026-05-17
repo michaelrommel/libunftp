@@ -345,7 +345,7 @@ where
     Storage: StorageBackend<User> + 'static,
     Storage::Metadata: Metadata,
 {
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn handle_internal_msg(&self, msg: ControlChanMsg) -> Result<Reply, ControlChanError> {
         use self::ControlChanMsg::*;
         use SessionState::*;
@@ -413,7 +413,7 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn handle_command(&self, cmd: Command) -> Result<Reply, ControlChanError> {
         let args = CommandContext {
             parsed_command: cmd.clone(),

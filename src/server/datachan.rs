@@ -110,8 +110,11 @@ where
         let mut data_abort_rx = self.data_abort_rx.take().unwrap();
         let mut timeout_delay = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(5 * 60)));
         // TODO: Use configured timeout
+        slog::info!(self.logger, "Data task: waiting for STOR/RETR command or 5-min timeout");
         tokio::select! {
             Some(command) = data_cmd_rx.recv() => {
+                let path = command.path().unwrap_or_default();
+                slog::info!(self.logger, "Data task: command received, starting transfer"; "path" => &path);
                 let session = session_arc.lock().await;
                 self.handle_incoming(DataChanMsg::ExternalCommand(command), session.start_pos).await;
             },
@@ -119,14 +122,14 @@ where
                 self.handle_incoming(DataChanMsg::Abort, 0).await;
             },
             _ = &mut timeout_delay => {
-                slog::warn!(self.logger, "Data channel connection timed out");
+                slog::warn!(self.logger, "Data task: timed out after 5 min waiting for STOR/RETR command; data connection was established but no transfer command arrived");
             }
         };
         let mut session = session_arc.lock().await;
         session.data_busy = false;
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn handle_incoming(self, incoming: DataChanMsg, start_pos: u64) {
         match incoming {
             DataChanMsg::Abort => {
@@ -140,7 +143,7 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn execute_command(self, cmd: DataChanCmd, start_pos: u64) {
         match cmd {
             DataChanCmd::Retr { path } => {
@@ -164,7 +167,7 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn exec_retr(self, path: String, start_pos: u64) {
         let path_copy = path.clone();
         let path = self.cwd.join(path);
@@ -257,12 +260,12 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn exec_stor(self, path: String, start_pos: u64) {
         let path_copy = path.clone();
         let path = self.cwd.join(path);
         let tx = self.control_msg_tx.clone();
-
+        slog::info!(self.logger, "STOR: transfer starting"; "path" => &path_copy, "start_pos" => start_pos);
         let start_time = Instant::now();
         let put_result = self
             .storage
@@ -311,7 +314,7 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn exec_appe(self, path: String) {
         let path_copy = path.clone();
         let full_path = self.cwd.join(&path);
@@ -365,7 +368,7 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn exec_list_variant(self, path: Option<String>, command: ListCommand) {
         let path = self.resolve_path(path);
         let tx = self.control_msg_tx.clone();
@@ -453,7 +456,7 @@ where
         }
     }
 
-    #[tracing_attributes::instrument]
+    #[tracing_attributes::instrument(skip(self))]
     async fn exec_mlsd(self, path: Option<String>) {
         let path = self.resolve_path(path);
         let tx = self.control_msg_tx.clone();
@@ -603,7 +606,7 @@ where
 /// logger: logger set up with needed context for use by the data channel.
 /// session_arc: the user session that is also shared with the control channel.
 /// socket: the data socket we'll be working with.
-#[tracing_attributes::instrument]
+#[tracing_attributes::instrument(skip(logger, session_arc, socket))]
 pub async fn spawn_processing<Storage, User>(logger: slog::Logger, session_arc: SharedSession<Storage, User>, mut socket: TcpStream)
 where
     Storage: StorageBackend<User> + 'static,
