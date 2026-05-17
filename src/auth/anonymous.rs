@@ -28,6 +28,7 @@ impl Authenticator for AnonymousAuthenticator {
     async fn authenticate(&self, username: &str, _creds: &Credentials) -> Result<Principal, AuthenticationError> {
         Ok(Principal {
             username: username.to_string(),
+            source_ip: None,
         })
     }
 

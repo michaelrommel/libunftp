@@ -128,6 +128,7 @@ impl Authenticator for TestAuthenticator {
                 if pwd == "test" {
                     Ok(Principal {
                         username: username.to_string(),
+                        source_ip: None,
                     })
                 } else {
                     Err(AuthenticationError::BadPassword)

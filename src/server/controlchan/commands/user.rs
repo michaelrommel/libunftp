@@ -123,6 +123,7 @@ mod tests {
             if self.auth_ok {
                 Ok(Principal {
                     username: username.to_string(),
+                    source_ip: None,
                 })
             } else {
                 Err(AuthenticationError::new("bad credentials"))

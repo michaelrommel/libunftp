@@ -58,6 +58,13 @@ pub trait Authenticator: Sync + Send + Debug {
 pub struct Principal {
     /// The authenticated username
     pub username: String,
+    /// The IP address of the client connection.
+    ///
+    /// Set by [`Authenticator`] implementations that have access to the source
+    /// IP (available via [`Credentials::source_ip`]) and want to make it
+    /// available to a [`UserDetailProvider`] downstream.
+    /// Authenticators that do not set this field leave it as `None`.
+    pub source_ip: Option<std::net::IpAddr>,
 }
 
 /// The error type returned by `Authenticator.authenticate`

@@ -354,6 +354,7 @@ impl Authenticator for JsonFileAuthenticator {
             } else {
                 Ok(Principal {
                     username: username.to_string(),
+                    source_ip: None,
                 })
             };
 
@@ -367,6 +368,7 @@ impl Authenticator for JsonFileAuthenticator {
                             if is_authorized {
                                 Some(Ok(Principal {
                                     username: username.to_string(),
+                                    source_ip: None,
                                 }))
                             } else {
                                 Some(Err(AuthenticationError::CnDisallowed))
@@ -376,6 +378,7 @@ impl Authenticator for JsonFileAuthenticator {
                     },
                     (None, _) => Some(Ok(Principal {
                         username: username.to_string(),
+                        source_ip: None,
                     })),
                 },
                 (Some(_), None) => Some(Err(AuthenticationError::CnDisallowed)),
@@ -387,6 +390,7 @@ impl Authenticator for JsonFileAuthenticator {
                     if Self::check_password(given_password, &actual_creds.password).is_ok() {
                         Some(Ok(Principal {
                             username: username.to_string(),
+                            source_ip: None,
                         }))
                     } else {
                         Some(Err(AuthenticationError::BadPassword))
