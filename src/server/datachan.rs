@@ -214,7 +214,7 @@ where
                     })
                     .await
                 {
-                    slog::error!(self.logger, "Could not notify control channel of successful RETR: {:?}", err);
+                    slog::debug!(self.logger, "Could not notify control channel of successful RETR: {:?}", err);
                 }
             }
             Err(err) => {
@@ -296,7 +296,7 @@ where
                 }
 
                 if let Err(err) = tx.send(ControlChanMsg::WrittenData { bytes, path: path_copy }).await {
-                    slog::error!(self.logger, "Could not notify control channel of successful STOR: {:?}", err);
+                    slog::debug!(self.logger, "Could not notify control channel of successful STOR: {:?}", err);
                 }
             }
             Err(err) => {
@@ -353,7 +353,7 @@ where
                 metrics::inc_transferred("appe", "success");
 
                 if let Err(err) = tx.send(ControlChanMsg::WrittenData { bytes, path: path_copy }).await {
-                    slog::error!(self.logger, "Could not notify control channel of successful APPE: {:?}", err);
+                    slog::debug!(self.logger, "Could not notify control channel of successful APPE: {:?}", err);
                 }
             }
             Err(err) => {
@@ -516,7 +516,7 @@ where
                         metrics::inc_transferred("mlsd", "success");
 
                         if let Err(err) = tx.send(ControlChanMsg::DirectorySuccessfullyListed).await {
-                            slog::error!(self.logger, "Could not notify control channel of successful MLSD: {:?}", err);
+                            slog::debug!(self.logger, "Could not notify control channel of successful MLSD: {:?}", err);
                         }
                     }
                     Err(err) => {
@@ -766,7 +766,7 @@ impl fmt::Display for TransferSpeed {
 }
 
 // Collapse the StorageError kind into a client-error, server-error or unknown-error.
-// The PermissionDenied is seperated because it depends on specifics whether it is a server or client error
+// The PermissionDenied is separated because it depends on specifics whether it is a server or client error
 // Unknown errors should not happen but need to be handled
 fn categorize_and_register_error(logger: &slog::Logger, err: &Error, command: &'static str) {
     match err.kind() {
